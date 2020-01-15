@@ -1,0 +1,7 @@
+
+# Binary files
+*.npy
+
+# Caching folders
+**/__pycache__
+**/.ipynb_checkpoints
