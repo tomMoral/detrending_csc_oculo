@@ -17,19 +17,23 @@ from .update_z import update_z
 from .update_d import update_d_block
 from .update_trend import update_trend
 
+
 def pen_tv(trend):
     return np.sum(np.abs(np.diff(trend, axis=-1)))
 
 
-def objective(X, X_hat, z_hat, trend, reg_z, reg_trend, pen_trend=pen_tv, sample_weights=None):
+def objective(X, X_hat, z_hat, trend, reg_z, reg_trend, pen_trend=pen_tv,
+              sample_weights=None):
     residual = X - X_hat
     if sample_weights is not None:
         residual *= np.sqrt(sample_weights)
-    obj = 0.5 * linalg.norm(residual, 'fro') ** 2 + reg_z * z_hat.sum() + reg_trend * pen_trend(trend)
+    obj = 0.5 * linalg.norm(residual, 'fro') ** 2 + reg_z * z_hat.sum()
+    obj += reg_trend * pen_trend(trend)
     return obj
 
 
-def compute_X_and_objective(X, z_hat, d_hat, trend, reg_z, reg_trend, pen_trend=pen_tv, sample_weights=None,
+def compute_X_and_objective(X, z_hat, d_hat, trend, reg_z, reg_trend,
+                            pen_trend=pen_tv, sample_weights=None,
                             feasible_evaluation=True):
     X_hat = construct_X_trend(z_hat, d_hat, trend)
 
@@ -43,15 +47,17 @@ def compute_X_and_objective(X, z_hat, d_hat, trend, reg_z, reg_trend, pen_trend=
         # update z in the opposite way
         z_hat[mask] *= d_norm[mask][:, None, None]
 
-    return objective(X, X_hat, z_hat, trend, reg_z, reg_trend, pen_trend, sample_weights)
+    return objective(X, X_hat, z_hat, trend, reg_z, reg_trend, pen_trend,
+                     sample_weights)
 
 
-def learn_d_z_trend(X, n_atoms, n_times_atom, func_d=update_d_block, reg_z=0.1, reg_trend=0.1, pen_trend=pen_tv,
-              lmbd_max='fixed', n_iter=60, trend_init=None, random_state=None, n_jobs=1,
-              solver_z='l-bfgs', solver_d_kwargs=dict(),
-              solver_z_kwargs=dict(), ds_init=None, ds_init_params=dict(),
-              sample_weights=None, verbose=10, callback=None,
-              stopping_pobj=None):
+def learn_d_z_trend(X, n_atoms, n_times_atom, func_d=update_d_block, reg_z=0.1,
+                    reg_trend=0.1, pen_trend=pen_tv, lmbd_max='scaled',
+                    n_iter=60, trend_init=None, random_state=None, n_jobs=1,
+                    solver_z='l-bfgs', solver_d_kwargs=dict(),
+                    solver_z_kwargs=dict(), ds_init=None,
+                    ds_init_params=dict(), sample_weights=None, verbose=10,
+                    callback=None, stopping_pobj=None):
     """Univariate Convolutional Sparse Coding.
 
     Parameters
@@ -68,7 +74,7 @@ def learn_d_z_trend(X, n_atoms, n_times_atom, func_d=update_d_block, reg_z=0.1, 
         The regularization parameter for the sparsity in z
     reg_trend : float
         The regularization parameter for the trend
-    pen_trend : callable 
+    pen_trend : callable
         The penalization function for the trend
     lmbd_max : 'fixed' | 'scaled' | 'per_atom' | 'shared'
         If not fixed, adapt the regularization rate as a ratio of lambda_max:
@@ -126,8 +132,8 @@ def learn_d_z_trend(X, n_atoms, n_times_atom, func_d=update_d_block, reg_z=0.1, 
 
     rng = check_random_state(random_state)
 
-    # trend init 
-    if (trend_init==None).all():
+    # trend init
+    if trend_init is None:
         trend = np.zeros((n_trials, n_times))
     else:
         assert trend_init.shape == X.shape
@@ -142,8 +148,8 @@ def learn_d_z_trend(X, n_atoms, n_times_atom, func_d=update_d_block, reg_z=0.1, 
     d_hat = d_hat[:, 0, :]
 
     # strategy for rescaling the regularization parameter
-    reg_z0 = reg_z
-    lambda_max = get_lambda_max(X, d_hat, sample_weights).max()
+    reg = reg_z0 = reg_z
+    lambda_max = get_lambda_max(X - trend, d_hat, sample_weights).max()
     if lmbd_max == "scaled":
         reg = reg_z0 * lambda_max
 
@@ -158,7 +164,8 @@ def learn_d_z_trend(X, n_atoms, n_times_atom, func_d=update_d_block, reg_z=0.1, 
     lambd0 = None
     z_hat = np.zeros((n_atoms, n_trials, n_times - n_times_atom + 1))
 
-    pobj.append(compute_X_and_objective(X, z_hat, d_hat, trend, reg_z, reg_trend, pen_trend, sample_weights))
+    pobj.append(compute_X_and_objective(X, z_hat, d_hat, trend, reg, reg_trend,
+                                        pen_trend, sample_weights))
     times.append(0.)
     with Parallel(n_jobs=n_jobs) as parallel:
         for ii in range(n_iter):  # outer loop of coordinate descent
@@ -176,15 +183,17 @@ def learn_d_z_trend(X, n_atoms, n_times_atom, func_d=update_d_block, reg_z=0.1, 
                     reg = reg.max()
 
             start = time.time()
-            z_hat = update_z(X-trend, d_hat, reg_z, z0=z_hat, parallel=parallel,
+            z_hat = update_z(X-trend, d_hat, reg, z0=z_hat, parallel=parallel,
                              solver=solver_z, b_hat_0=b_hat_0,
                              solver_kwargs=solver_z_kwargs,
                              sample_weights=sample_weights)
+            trend = update_trend(X, z_hat, d_hat, reg_trend)
             times.append(time.time() - start)
 
             # monitor cost function
             pobj.append(
-                compute_X_and_objective(X, z_hat, d_hat, trend, reg_z, reg_trend, pen_trend, sample_weights))
+                compute_X_and_objective(X, z_hat, d_hat, trend, reg, reg_trend,
+                                        pen_trend, sample_weights))
             if verbose > 1:
                 print('[seed %s] Objective (z_hat) : %0.8f' % (random_state,
                                                                pobj[-1]))
@@ -203,18 +212,16 @@ def learn_d_z_trend(X, n_atoms, n_times_atom, func_d=update_d_block, reg_z=0.1, 
                                    sample_weights=sample_weights)
             times.append(time.time() - start)
 
-
-            trend = update_trend(X, z_hat, d_hat, reg_trend)
-
             # monitor cost function
             pobj.append(
-                compute_X_and_objective(X, z_hat, d_hat, trend, reg_z, reg_trend, pen_trend, sample_weights))
+                compute_X_and_objective(X, z_hat, d_hat, trend, reg, reg_trend,
+                                        pen_trend, sample_weights))
             if verbose > 1:
                 print('[seed %s] Objective (d) %0.8f' % (random_state,
                                                          pobj[-1]))
 
             if callable(callback):
-                callback(X, d_hat, z_hat, trend, reg_z, reg_trend, pen_trend)
+                callback(X, d_hat, z_hat, trend, reg, reg_trend, pen_trend)
 
             if stopping_pobj is not None and pobj[-1] < stopping_pobj:
                 break
@@ -222,4 +229,4 @@ def learn_d_z_trend(X, n_atoms, n_times_atom, func_d=update_d_block, reg_z=0.1, 
         if verbose == 1:
             print('')
 
-    return pobj, times, d_hat, z_hat, trend, reg_z, reg_trend
+    return pobj, times, d_hat, z_hat, trend, reg, reg_trend

@@ -1,5 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
+from joblib import Memory
+from joblib.memory import MemorizedFunc
 
 from alphacsc.utils import check_random_state
 
@@ -18,10 +20,25 @@ STD_AMPLITUDES = {
     'nystagmus': 2
 }
 
+mem = Memory(location='.', verbose=False)
+
 
 def format_docstring(func):
     func.__doc__ = func.__doc__.format(**globals())
     return func
+
+
+def random_cache(func):
+    if not isinstance(func, MemorizedFunc):
+        return func
+
+    def cached_random_function(*args, random_state=None, **kwargs):
+        if random_state is None:
+            res, info = func.call(*args, **kwargs, random_state=None)
+            return res
+        else:
+            return func(*args, **kwargs)
+    return cached_random_function
 
 
 def jerk(t, curv=0):
@@ -139,27 +156,36 @@ def generate_signal(n_times=5000, s_freq=1000, nystagmus_type="pendular",
     signal += std_noise * rng.randn(n_times)
 
     # Create the nystagmus signal depending on its type .
+    t_pattern = np.arange(s_freq/nystagmus_freq) / s_freq * nystagmus_freq
     if nystagmus_type == "pendular":
-        nyst = np.cos(2 * np.pi * t*nystagmus_freq)
+        nyst = np.cos(2 * np.pi * t * nystagmus_freq)
+        nyst_pattern = np.cos(2 * np.pi * t_pattern)
     elif "jerk" in nystagmus_type:
         sign = -1 if "_down_" in nystagmus_type else 1
         nyst = sign * jerk((t * nystagmus_freq % 1), curv)
+        nyst_pattern = sign * jerk((t_pattern % 1), curv)
         if "_fs_" in nystagmus_type:
             nyst = nyst[::-1]
+            nyst_pattern = nyst_pattern[::-1]
     else:
         raise NotImplementedError(f"Unknown nystagmus type {nystagmus_type}. "
                                   f"Should be one of {NYSTAGMUS_TYPES}.")
     nyst *= nystagmus_amp / np.std(nyst)
 
     if display:
-        plt.plot(signal + nyst)
+        print(nystagmus_freq)
+        plt.plot(nyst)
+        # plt.plot(signal + nyst)
+        plt.plot(nyst_pattern)
         plt.show()
 
-    return signal, nyst
+    return signal, nyst, nyst_pattern
 
 
-def simulate_oculo(n_trials, n_times, std_noise=.3, display=False,
-                   random_state=None):
+@random_cache
+@mem.cache(ignore=['display'])
+def load_data(n_trials, n_times, std_noise=.3, display=False,
+              random_state=None):
     """Simulate a dataset of n_trials oculo signal with facsimile nystagmus.
 
     Parameters
@@ -188,6 +214,7 @@ def simulate_oculo(n_trials, n_times, std_noise=.3, display=False,
 
     trends = np.zeros((n_trials, n_times))
     nystagmus = np.zeros((n_trials, n_times))
+    nyst_patterns = np.zeros((n_trials, s_freq))
     for i in range(n_trials):
         print(f"Generate signals: {i/n_trials:7.2%}\r", end='', flush=True)
         # Generate the signal parameter
@@ -204,15 +231,18 @@ def simulate_oculo(n_trials, n_times, std_noise=.3, display=False,
         # Curvature of the jerk
         curv = max(0, min(0.5+0.25*rng.randn(), 1))
 
-        # Generate the signal
-        trends[i], nystagmus[i] = generate_signal(
+        args = dict(
             n_times=n_times, nystagmus_type=nystagmus_type, s_freq=s_freq,
             nystagmus_freq=nystagmus_freq, nystagmus_amp=nystagmus_amp,
             saccad_freq=saccad_freq, saccad_amp=saccad_amp,
             dt_sigm=dt_sigm, curv=curv, low_freq_amp=low_freq_amp,
-            std_noise=std_noise, display=display, random_state=rng)
+            std_noise=std_noise, display=display, random_state=rng
+        )
+        # Generate the signal
+        trends[i], nystagmus[i], nyst_pattern = generate_signal(**args)
+        nyst_patterns[i, :len(nyst_pattern)] = nyst_pattern
     print(f"Generate signals: done".ljust(40))
-    return trends, nystagmus
+    return trends, nystagmus, nyst_patterns
 
 
 if __name__ == '__main__':
@@ -234,8 +264,10 @@ if __name__ == '__main__':
     n_trials = args.n_trials
     n_times = args.n_times
 
-    trends, nystagmus = simulate_oculo(n_trials=n_trials, n_times=n_times,
-                                       display=args.display)
+    trends, nystagmus, nystagmus_patterns = load_data(
+        n_trials=n_trials, n_times=n_times, display=args.display,
+        random_state=42)
 
     np.save(os.path.join(args.data_dir, "trends"), trends)
     np.save(os.path.join(args.data_dir, "nysts"), nystagmus)
+    np.save(os.path.join(args.data_dir, "nystagmus_patterns"), nystagmus)

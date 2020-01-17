@@ -8,6 +8,7 @@ from __future__ import print_function
 import time
 import sys
 
+import prox_tv
 import numpy as np
 
 from .utils import lil
@@ -17,6 +18,7 @@ from .utils.dictionary import get_lambda_max
 from .utils.whitening import whitening
 from .init_dict import init_dictionary, get_max_error_dict
 from .loss_and_gradient import compute_X_and_objective_multi
+from .loss_and_gradient import construct_X_multi
 from .update_z_multi import update_z_multi
 from .update_d_multi import update_uv, update_d
 
@@ -33,7 +35,8 @@ def learn_d_z_multi(X, n_atoms, n_times_atom, n_iter=60, n_jobs=1,
                     unbiased_z_hat=False, use_sparse_z=False,
                     stopping_pobj=None, raise_on_increase=True,
                     verbose=10, callback=None, random_state=None, name="DL",
-                    window=False, sort_atoms=False):
+                    window=False, sort_atoms=False,
+                    trend_init=None, trend_reg=.01):
     """Multivariate Convolutional Sparse Coding with optional rank-1 constraint
 
     Parameters
@@ -159,7 +162,16 @@ def learn_d_z_multi(X, n_atoms, n_times_atom, n_iter=60, n_jobs=1,
     start = time.time()
     rng = check_random_state(random_state)
 
-    D_hat = init_dictionary(X, n_atoms, n_times_atom, D_init=D_init,
+    def get_trend(X):
+        return np.array([[prox_tv.tv1_1d(x_nc, trend_reg)
+                          for x_nc in x_n] for x_n in X])
+    if trend_init is None:
+        trend = get_trend(X)
+    else:
+        assert trend_init.shape == X.shape
+        trend = trend_init
+
+    D_hat = init_dictionary(X-trend, n_atoms, n_times_atom, D_init=D_init,
                             rank1=rank1, uv_constraint=uv_constraint,
                             D_init_params=D_init_params, random_state=rng,
                             window=window)
@@ -173,13 +185,19 @@ def learn_d_z_multi(X, n_atoms, n_times_atom, n_iter=60, n_jobs=1,
 
     # Compute the coefficients to whiten X. TODO: add timing
     if loss == 'whitening':
-        loss_params['ar_model'], X = whitening(X, ordar=loss_params['ordar'])
+        loss_params['ar_model'], X = whitening(
+            X - trend, ordar=loss_params['ordar'])
 
-    _lmbd_max = get_lambda_max(X, D_hat).max()
+    _lmbd_max = get_lambda_max(X - trend, D_hat).max()
     if verbose > 1:
         print("[{}] Max value for lambda: {}".format(name, _lmbd_max))
     if lmbd_max == "scaled":
         reg = reg * _lmbd_max
+
+    def compute_trend(X, z_hat, D_hat):
+        X_hat = construct_X_multi(z_hat, D_hat)
+        residual = X - X_hat
+        return get_trend(residual)
 
     def compute_z_func(X, z_hat, D_hat, reg=None):
         return update_z_multi(X, D_hat, reg=reg, z0=z_hat,
@@ -187,13 +205,14 @@ def learn_d_z_multi(X, n_atoms, n_times_atom, n_iter=60, n_jobs=1,
                               loss=loss, loss_params=loss_params,
                               n_jobs=n_jobs, return_ztz=True)
 
-    def obj_func(X, z_hat, D_hat, reg=None, return_X_hat=False):
-        return compute_X_and_objective_multi(X, z_hat, D_hat,
-                                             reg=reg, loss=loss,
-                                             loss_params=loss_params,
-                                             uv_constraint=uv_constraint,
-                                             feasible_evaluation=True,
-                                             return_X_hat=return_X_hat)
+    def obj_func(X, z_hat, D_hat, trend, reg=None, return_X_hat=False):
+        obj = compute_X_and_objective_multi(X - trend, z_hat, D_hat,
+                                            reg=reg, loss=loss,
+                                            loss_params=loss_params,
+                                            uv_constraint=uv_constraint,
+                                            feasible_evaluation=True,
+                                            return_X_hat=return_X_hat)
+        return obj + trend_reg * np.sum(abs(np.diff(trend, axis=-1)))
 
     d_kwargs = dict(verbose=verbose, eps=1e-8)
     d_kwargs.update(solver_d_kwargs)
@@ -223,7 +242,8 @@ def learn_d_z_multi(X, n_atoms, n_times_atom, n_iter=60, n_jobs=1,
                                        name, verbose, raise_on_increase)
 
     # common parameters
-    kwargs = dict(X=X, D_hat=D_hat, z_hat=z_hat, compute_z_func=compute_z_func,
+    kwargs = dict(X=X, D_hat=D_hat, z_hat=z_hat, trend=trend,
+                  compute_z_func=compute_z_func, compute_trend=compute_trend,
                   compute_d_func=compute_d_func, obj_func=obj_func,
                   end_iter_func=end_iter_func, n_iter=n_iter, verbose=verbose,
                   random_state=random_state, window=window, reg=reg,
@@ -231,17 +251,17 @@ def learn_d_z_multi(X, n_atoms, n_times_atom, n_iter=60, n_jobs=1,
     kwargs.update(algorithm_params)
 
     if algorithm == 'batch':
-        pobj, times, D_hat, z_hat = _batch_learn(greedy=False, **kwargs)
+        pobj, times, D_hat, z_hat, trend = _batch_learn(greedy=False, **kwargs)
     elif algorithm == "greedy":
-        pobj, times, D_hat, z_hat = _batch_learn(greedy=True, **kwargs)
+        pobj, times, D_hat, z_hat, trend = _batch_learn(greedy=True, **kwargs)
     elif algorithm == "online":
-        pobj, times, D_hat, z_hat = _online_learn(**kwargs)
+        pobj, times, D_hat, z_hat, trend = _online_learn(**kwargs)
     elif algorithm == "stochastic":
         # For stochastic learning, set forgetting factor alpha of the
         # online algorithm to 0, making each step independent of previous
         # steps and set D-update max_iter to a low value (typically 1).
         kwargs['alpha'] = 0
-        pobj, times, D_hat, z_hat = _online_learn(**kwargs)
+        pobj, times, D_hat, z_hat, trend = _online_learn(**kwargs)
     else:
         raise NotImplementedError(
             "Algorithm '{}' is not implemented to learn dictionary atoms."
@@ -255,7 +275,7 @@ def learn_d_z_multi(X, n_atoms, n_times_atom, n_iter=60, n_jobs=1,
     if unbiased_z_hat:
         start_unbiased_z_hat = time.time()
         z_hat, _, _ = update_z_multi(
-            X, D_hat, reg=0, z0=z_hat, n_jobs=n_jobs, solver=solver_z,
+            X - trend, D_hat, reg=0, z0=z_hat, n_jobs=n_jobs, solver=solver_z,
             solver_kwargs=solver_z_kwargs, freeze_support=True, loss=loss,
             loss_params=loss_params)
         if verbose > 1:
@@ -270,12 +290,13 @@ def learn_d_z_multi(X, n_atoms, n_times_atom, n_iter=60, n_jobs=1,
     # Rescale the solution to match the given scale of the problem
     z_hat *= std_X
     reg *= std_X
+    trend *= std_X
 
-    return pobj, times, D_hat, z_hat, reg
+    return pobj, times, D_hat, z_hat, trend, reg
 
 
-def _batch_learn(X, D_hat, z_hat, compute_z_func, compute_d_func,
-                 obj_func, end_iter_func, n_iter=100,
+def _batch_learn(X, D_hat, z_hat, trend, compute_z_func, compute_trend,
+                 compute_d_func, obj_func, end_iter_func, n_iter=100,
                  lmbd_max='fixed', reg=None, verbose=0, greedy=False,
                  random_state=None, name="batch", uv_constraint='separate',
                  window=False):
@@ -303,7 +324,7 @@ def _batch_learn(X, D_hat, z_hat, compute_z_func, compute_d_func,
 
     # monitor cost function
     times = [0]
-    pobj = [obj_func(X, z_hat, D_hat, reg=reg_)]
+    pobj = [obj_func(X, z_hat, D_hat, trend, reg=reg_)]
 
     for ii in range(n_iter):  # outer loop of coordinate descent
         if verbose == 1:
@@ -315,14 +336,14 @@ def _batch_learn(X, D_hat, z_hat, compute_z_func, compute_d_func,
 
         if greedy and ii % n_iter_by_atom == 0 and D_hat.shape[0] < n_atoms:
             # add a new atom every n_iter_by_atom iterations
-            new_atom = get_max_error_dict(X, z_hat, D_hat,
+            new_atom = get_max_error_dict(X - trend, z_hat, D_hat,
                                           uv_constraint=uv_constraint,
                                           window=window)[0]
             D_hat = np.concatenate([D_hat, new_atom[None]])
             z_hat = lil.add_one_atom_in_z(z_hat)
 
         if lmbd_max not in ['fixed', 'scaled']:
-            reg_ = reg * get_lambda_max(X, D_hat)
+            reg_ = reg * get_lambda_max(X - trend, D_hat)
             if lmbd_max == 'shared':
                 reg_ = reg_.max()
 
@@ -332,16 +353,17 @@ def _batch_learn(X, D_hat, z_hat, compute_z_func, compute_d_func,
         # Compute z update
         start = time.time()
         z_hat, constants['ztz'], constants['ztX'] = compute_z_func(
-            X, z_hat, D_hat, reg=reg_)
+            X - trend, z_hat, D_hat, reg=reg_)
+        trend = compute_trend(X, z_hat, D_hat)
 
         # monitor cost function
         times.append(time.time() - start)
-        pobj.append(obj_func(X, z_hat, D_hat, reg=reg_))
+        pobj.append(obj_func(X, z_hat, D_hat, trend, reg=reg_))
 
         z_nnz, z_size = lil.get_nnz_and_size(z_hat)
         if verbose > 5:
-            print("[{}] sparsity: {:.3e}".format(
-                name, z_nnz.sum() / z_size))
+            print("[{}] sparsity: {:.1e}%".format(
+                name, z_nnz.sum() / z_size * 100))
             print('[{}] Objective (z) : {:.3e}'.format(name, pobj[-1]))
 
         if np.all(z_nnz == 0):
@@ -353,32 +375,32 @@ def _batch_learn(X, D_hat, z_hat, compute_z_func, compute_d_func,
 
         # Compute D update
         start = time.time()
-        D_hat = compute_d_func(X, z_hat, D_hat, constants)
+        D_hat = compute_d_func(X - trend, z_hat, D_hat, constants)
 
         # monitor cost function
         times.append(time.time() - start)
-        pobj.append(obj_func(X, z_hat, D_hat, reg=reg_))
+        pobj.append(obj_func(X, z_hat, D_hat, trend, reg=reg_))
 
         null_atom_indices = np.where(z_nnz == 0)[0]
         if len(null_atom_indices) > 0:
             k0 = null_atom_indices[0]
-            D_hat[k0] = get_max_error_dict(X, z_hat, D_hat, uv_constraint,
-                                           window=window)[0]
+            D_hat[k0] = get_max_error_dict(X - trend, z_hat, D_hat,
+                                           uv_constraint, window=window)[0]
             if verbose > 5:
                 print('[{}] Resampled atom {}'.format(name, k0))
 
         if verbose > 5:
             print('[{}] Objective (d) : {:.3e}'.format(name, pobj[-1]))
 
-        if end_iter_func(X, z_hat, D_hat, pobj, ii):
+        if end_iter_func(X, z_hat, D_hat, trend, pobj, ii):
             break
 
-    return pobj, times, D_hat, z_hat
+    return pobj, times, D_hat, z_hat, trend
 
 
-def _online_learn(X, D_hat, z_hat, compute_z_func, compute_d_func,
-                  obj_func, end_iter_func, n_iter=100, verbose=0,
-                  random_state=None, lmbd_max='fixed', reg=None,
+def _online_learn(X, D_hat, z_hat, trend, compute_z_func, compute_trend,
+                  compute_d_func, obj_func, end_iter_func, n_iter=100,
+                  verbose=0, random_state=None, lmbd_max='fixed', reg=None,
                   alpha=.8, batch_selection='random', batch_size=1,
                   name="online", uv_constraint='separate', window=False):
 
@@ -399,7 +421,7 @@ def _online_learn(X, D_hat, z_hat, compute_z_func, compute_d_func,
 
     # monitor cost function
     times = [0]
-    pobj = [obj_func(X, z_hat, D_hat, reg=reg_)]
+    pobj = [obj_func(X, z_hat, D_hat, trend, reg=reg_)]
 
     for ii in range(n_iter):  # outer loop of coordinate descent
         if verbose == 1:
@@ -410,7 +432,7 @@ def _online_learn(X, D_hat, z_hat, compute_z_func, compute_d_func,
             print('[{}] CD iterations {} / {}'.format(name, ii, n_iter))
 
         if lmbd_max not in ['fixed', 'scaled']:
-            reg_ = reg * get_lambda_max(X, D_hat)
+            reg_ = reg * get_lambda_max(X - trend, D_hat)
             if lmbd_max == 'shared':
                 reg_ = reg_.max()
 
@@ -429,14 +451,16 @@ def _online_learn(X, D_hat, z_hat, compute_z_func, compute_d_func,
             raise NotImplementedError(
                 "the '{}' batch_selection strategy for the online learning is "
                 "not implemented.".format(batch_selection))
-        z_hat[i0], ztz, ztX = compute_z_func(X[i0], z_hat[i0], D_hat, reg=reg_)
+        z_hat[i0], ztz, ztX = compute_z_func(X[i0] - trend[i0], z_hat[i0],
+                                             D_hat, reg=reg_)
+        trend[i0] = compute_trend(X[i0], z_hat[i0], D_hat)
 
         constants['ztz'] = alpha * constants['ztz'] + ztz
         constants['ztX'] = alpha * constants['ztX'] + ztX
 
         # monitor cost function
         times.append(time.time() - start)
-        pobj.append(obj_func(X, z_hat, D_hat, reg=reg_))
+        pobj.append(obj_func(X, z_hat, D_hat, trend, reg=reg_))
 
         z_nnz, z_size = lil.get_nnz_and_size(z_hat)
         if verbose > 5:
@@ -453,34 +477,34 @@ def _online_learn(X, D_hat, z_hat, compute_z_func, compute_d_func,
 
         # Compute D update
         start = time.time()
-        D_hat = compute_d_func(X, z_hat, D_hat, constants)
+        D_hat = compute_d_func(X - trend, z_hat, D_hat, constants)
 
         # monitor cost function
         times.append(time.time() - start)
-        pobj.append(obj_func(X, z_hat, D_hat, reg=reg_))
+        pobj.append(obj_func(X, z_hat, D_hat, trend, reg=reg_))
 
         null_atom_indices = np.where(z_nnz == 0)[0]
         if len(null_atom_indices) > 0:
             k0 = null_atom_indices[0]
-            D_hat[k0] = get_max_error_dict(X, z_hat, D_hat, uv_constraint,
-                                           window=window)[0]
+            D_hat[k0] = get_max_error_dict(X - trend, z_hat, D_hat,
+                                           uv_constraint, window=window)[0]
             if verbose > 5:
                 print('[{}] Resampled atom {}'.format(name, k0))
 
         if verbose > 5:
             print('[{}] Objective (d) : {:.3e}'.format(name, pobj[-1]))
 
-        if end_iter_func(X, z_hat, D_hat, pobj, ii):
+        if end_iter_func(X, z_hat, D_hat, trend, pobj, ii):
             break
 
-    return pobj, times, D_hat, z_hat
+    return pobj, times, D_hat, z_hat, trend
 
 
 def get_iteration_func(eps, stopping_pobj, callback, lmbd_max, name, verbose,
                        raise_on_increase):
-    def end_iteration(X, z_hat, D_hat, pobj, iteration):
+    def end_iteration(X, z_hat, D_hat, trend, pobj, iteration):
         if callable(callback):
-            callback(X, D_hat, z_hat, pobj)
+            callback(X, D_hat, z_hat, trend, pobj)
 
         # Only check that the cost is always going down when the regularization
         # parameter is fixed.
