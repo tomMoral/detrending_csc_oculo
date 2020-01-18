@@ -59,11 +59,6 @@ def run_one(X_i, nyst_i, pattern_i, csc_params, trend_reg, nyst_reg,
     trend_reg_ = trend_reg * get_lambda_max_tv(X_i)
     trend_init = get_trend_init(X_i, trend_reg_)
 
-    _, _, d_hat_no_detrend, z_hat_no_detrend, *_ = learn_d_z_multi(
-        X_i, n_times_atom=n_times_atom, reg=nyst_reg, trend_reg=NO_DETREND,
-        random_state=random_state, **csc_params
-    )
-
     _, _, d_hat_detrend_init, z_hat_detrend_init, *_ = learn_d_z_multi(
         X_i - trend_init, n_times_atom=n_times_atom, reg=nyst_reg,
         trend_reg=NO_DETREND, random_state=random_state,
@@ -76,13 +71,10 @@ def run_one(X_i, nyst_i, pattern_i, csc_params, trend_reg, nyst_reg,
 
     # Remove unused channel for evaluation and plots
     X_hat = construct_X_multi(z_hat, d_hat)[0, 0]
-    X_hat_no_detrend = construct_X_multi(z_hat_no_detrend,
-                                         d_hat_no_detrend)[0, 0]
     X_hat_detrend_init = construct_X_multi(z_hat_detrend_init,
                                            d_hat_detrend_init)[0, 0]
     xi = X_i[0, 0]
     d_hat = d_hat[:, 0]
-    d_hat_no_detrend = d_hat_no_detrend[:, 0]
     d_hat_detrend_init = d_hat_detrend_init[:, 0]
     trend_hat = trend_hat[0, 0]
     trend_init = trend_init[0, 0]
@@ -91,12 +83,10 @@ def run_one(X_i, nyst_i, pattern_i, csc_params, trend_reg, nyst_reg,
     res_trial = dict(
         r2_full=r2(nyst_i, X_hat),
         r2_init=r2(nyst_i, X_hat_detrend_init),
-        r2_no=r2(nyst_i, X_hat_no_detrend),
         r2_detrend_init=r2(nyst_i, xi - trend_init),
         r2_detrend_hat=r2(nyst_i, xi - trend_hat),
         corr_full=evaluate_d_hat(pattern_i, d_hat),
         corr_init=evaluate_d_hat(pattern_i, d_hat_detrend_init),
-        corr_no=evaluate_d_hat(pattern_i, d_hat_no_detrend),
         trend_reg=trend_reg, nyst_reg=nyst_reg,
 
     )
@@ -108,10 +98,8 @@ def run_one(X_i, nyst_i, pattern_i, csc_params, trend_reg, nyst_reg,
     print(f"R2 detrend: {res_trial['r2_detrend_hat']}")
     print(f"R2 denoise: {res_trial['r2_full']}")
     print(f"R2 denoise init: {res_trial['r2_init']}")
-    print(f"R2 denoise no trend: {res_trial['r2_no']}")
     print(f"Corr D_hat: {res_trial['corr_full']}")
     print(f"Corr D_hat init: {res_trial['corr_init']}")
-    print(f"Corr D_hat no trend: {res_trial['corr_no']}")
     print("=" * 80)
 
     if display:
@@ -150,7 +138,7 @@ if __name__ == "__main__":
     n_jobs = 1 if args.debug else args.n_jobs
 
     list_nyst_reg = [.9, .8, .5, .1]
-    list_trend_reg = [0.05, .1, .2, .5]
+    list_trend_reg = [0.05, .1, .2, .5, NO_DETREND]
 
     n_times = 10000
     n_trials = 1 if args.debug else args.n_trials
