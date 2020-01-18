@@ -138,8 +138,8 @@ if __name__ == "__main__":
         description="Run CSC detrending on simulated oculographic signals")
     parser.add_argument('--debug', action='store_true',
                         help="Use the debug mode")
-    parser.add_argument('--n-jobs', action='store_true',
-                        help="Use the debug mode")
+    parser.add_argument('--n-jobs', type=int, default=1,
+                        help="# of jobs to run the benchmark")
     args = parser.parse_args()
 
     n_jobs = 1 if args.debug else args.n_jobs
