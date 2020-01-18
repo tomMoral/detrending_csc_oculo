@@ -1,4 +1,5 @@
 import os
+import itertools
 import numpy as np
 import prox_tv as tv
 from datetime import datetime
@@ -95,11 +96,13 @@ def run_one(X_i, nyst_i, pattern_i, csc_params, trend_reg, nyst_reg,
         r2_detrend_hat=r2(nyst_i, xi - trend_hat),
         corr_full=evaluate_d_hat(pattern_i, d_hat),
         corr_init=evaluate_d_hat(pattern_i, d_hat_detrend_init),
-        corr_no=evaluate_d_hat(pattern_i, d_hat_no_detrend)
+        corr_no=evaluate_d_hat(pattern_i, d_hat_no_detrend),
+        trend_reg=trend_reg, nyst_reg=nyst_reg,
+
     )
 
     print("=" * 80)
-    print("Trial", i)
+    print(f"Trial {i} (l1: {nyst_reg}, tv: {trend_reg})")
     print("=" * 80)
     print(f"R2 init: {res_trial['r2_detrend_init']}")
     print(f"R2 detrend: {res_trial['r2_detrend_hat']}")
@@ -146,8 +149,8 @@ if __name__ == "__main__":
 
     n_jobs = 1 if args.debug else args.n_jobs
 
-    nyst_reg = .8
-    trend_reg = .1
+    list_nyst_reg = [.9, .8, .5, .1]
+    list_trend_reg = [0.05, .1, .2, .5]
 
     n_times = 10000
     n_trials = 1 if args.debug else args.n_trials
@@ -164,7 +167,7 @@ if __name__ == "__main__":
         window=True, solver_d_kwargs=dict(max_iter=50, eps=1e-8),
         raise_on_increase=False, n_iter=n_iter, eps=1e-8,
         n_jobs=1, verbose=verbose,
-        solver_z='lgcd', solver_z_kwargs=dict(tol=1e-5)
+        solver_z='lgcd', solver_z_kwargs=dict(tol=1e-1 if args.debug else 1e-5)
         # algorithm='greedy'
     )
 
@@ -175,14 +178,18 @@ if __name__ == "__main__":
     X_full = check_univariate_signal(X_full, normalize=False)
 
     seeds = rng.randint(int(1e5), size=n_trials)
+    args_iterator = itertools.product(
+        list_nyst_reg, list_trend_reg, zip(X_full, nyst, patterns, seeds)
+    )
     results = Parallel(n_jobs=n_jobs)(
         delayed(run_one)(X_i=X_i[None], nyst_i=nyst_i,
                          pattern_i=pattern_i[None],
                          csc_params=csc_params, trend_reg=trend_reg,
                          nyst_reg=nyst_reg, random_state=random_seed, i=i,
                          display=args.debug)
-        for i, (X_i, nyst_i, pattern_i, random_seed) in enumerate(zip(
-            X_full, nyst, patterns, seeds))
+        for i, (nyst_reg, trend_reg,
+                (X_i, nyst_i, pattern_i, random_seed)
+                ) in enumerate(args_iterator)
     )
 
     tag = f"{datetime.now().strftime('%Y-%m-%d_%Hh%M')}"
