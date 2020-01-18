@@ -1,5 +1,7 @@
+import os
 import numpy as np
 import prox_tv as tv
+from datetime import datetime
 import matplotlib.pyplot as plt
 from joblib import Parallel, delayed
 
@@ -10,6 +12,7 @@ from alphacsc_trend.loss_and_gradient import construct_X_multi
 from alphacsc_trend.utils.signal import check_univariate_signal
 
 NO_DETREND = 1000000
+OUTPUT_DIR = os.path.join(os.path.dirname(__file__), 'outputs')
 
 
 def evaluate_d_hat(patterns, d_hat):
@@ -47,14 +50,12 @@ def get_lambda_max_tv(X):
 
 
 def run_one(X_i, nyst_i, pattern_i, csc_params, trend_reg, nyst_reg,
-            random_state, i=0, debug=False):
+            random_state, i=0, display=False):
 
     l_pat = pattern_i[0].nonzero()[0].max()
     n_times_atom = int(l_pat * 1.5)
 
     trend_reg_ = trend_reg * get_lambda_max_tv(X_i)
-
-    random_state = rng.randint(int(1e5))
     trend_init = get_trend_init(X_i, trend_reg_)
 
     _, _, d_hat_no_detrend, z_hat_no_detrend, *_ = learn_d_z_multi(
@@ -110,7 +111,7 @@ def run_one(X_i, nyst_i, pattern_i, csc_params, trend_reg, nyst_reg,
     print(f"Corr D_hat no trend: {res_trial['corr_no']}")
     print("=" * 80)
 
-    if debug:
+    if display:
         plt.subplot(1, 2, 1)
         plt.plot(xi)
         plt.plot(trend_hat)
@@ -126,7 +127,6 @@ def run_one(X_i, nyst_i, pattern_i, csc_params, trend_reg, nyst_reg,
 
         import IPython
         IPython.embed(colors='neutral')
-        raise SystemExit(0)
 
     return res_trial
 
@@ -140,6 +140,8 @@ if __name__ == "__main__":
                         help="Use the debug mode")
     parser.add_argument('--n-jobs', type=int, default=1,
                         help="# of jobs to run the benchmark")
+    parser.add_argument('--n-trials', type=int, default=100,
+                        help="# of run to perform")
     args = parser.parse_args()
 
     n_jobs = 1 if args.debug else args.n_jobs
@@ -148,10 +150,11 @@ if __name__ == "__main__":
     trend_reg = .1
 
     n_times = 10000
-    n_trials = 1 if args.debug else 100
-    random_state = None if args.debug else 42
+    n_trials = 1 if args.debug else args.n_trials
     n_iter = 150 if args.debug else 200
+
     verbose = 1 if args.debug else 0
+    random_state = None if args.debug else 42
 
     rng = check_random_state(random_state)
 
@@ -161,6 +164,7 @@ if __name__ == "__main__":
         window=True, solver_d_kwargs=dict(max_iter=50, eps=1e-8),
         raise_on_increase=False, n_iter=n_iter, eps=1e-8,
         n_jobs=1, verbose=verbose,
+        solver_z='lgcd', solver_z_kwargs=dict(tol=1e-5)
         # algorithm='greedy'
     )
 
@@ -170,20 +174,23 @@ if __name__ == "__main__":
     X_full = trend + nyst
     X_full = check_univariate_signal(X_full, normalize=False)
 
+    seeds = rng.randint(int(1e5), size=n_trials)
     results = Parallel(n_jobs=n_jobs)(
         delayed(run_one)(X_i=X_i[None], nyst_i=nyst_i,
                          pattern_i=pattern_i[None],
                          csc_params=csc_params, trend_reg=trend_reg,
-                         nyst_reg=nyst_reg, random_state=random_state, i=i,
-                         debug=args.debug)
-        for i, (X_i, nyst_i, pattern_i) in enumerate(zip(X_full, nyst,
-                                                         patterns))
+                         nyst_reg=nyst_reg, random_state=random_seed, i=i,
+                         display=args.debug)
+        for i, (X_i, nyst_i, pattern_i, random_seed) in enumerate(zip(
+            X_full, nyst, patterns, seeds))
     )
 
+    tag = f"{datetime.now().strftime('%Y-%m-%d_%Hh%M')}"
+    out_file_name = os.path.join(OUTPUT_DIR, f"results_{tag}.pkl")
     try:
         import pandas as pd
         df = pd.DataFrame(results)
-        df.to_pickle('results.pkl')
+        df.to_pickle(out_file_name)
     except Exception:
         import IPython
         IPython.embed(colors='neutral')
