@@ -29,15 +29,22 @@ if __name__ == "__main__":
         if 'corr' in col_name:
             df[col_name] = [c[0][0] for c in df[col_name]]
 
+    width = .2
     props = dict(boxes="cornflowerblue", whiskers="Black",
                  medians="DarkBlue", caps="k")
+    for lmbd in df.nyst_reg.unique():
+        fig, ax = plt.subplots(num=str(lmbd))
+        df_l1 = df[df.nyst_reg == lmbd]
+        for i, reg in enumerate(df_l1.trend_reg.unique()):
+            df_l1tv = df_l1[df_l1.trend_reg == reg]
+            df_l1tv.corr_full.plot(
+                kind='box', ax=ax, positions=[(3*width)*i - width / 2])
+            df_l1tv.corr_init.plot(
+                kind='box', ax=ax, positions=[(3*width)*i + width / 2],
+                color=props)
 
     plt.figure()
-    df.plot(kind='box', y=['corr_full', 'corr_no', 'corr_init'],
-            patch_artist=True, color=props, showfliers=False)
-
-    plt.figure()
-    df.plot(kind='box', y=['r2_full', 'r2_no', 'r2_init'],
+    df.plot(kind='box', y=['r2_full', 'r2_init'],
             patch_artist=True, color=props, showfliers=False)
 
     plt.show()

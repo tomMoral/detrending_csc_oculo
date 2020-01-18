@@ -5,6 +5,7 @@ import prox_tv as tv
 from datetime import datetime
 import matplotlib.pyplot as plt
 from joblib import Parallel, delayed
+from joblib import Memory
 
 from alphacsc_trend.datasets import oculo
 from alphacsc_trend.utils import check_random_state
@@ -14,6 +15,9 @@ from alphacsc_trend.utils.signal import check_univariate_signal
 
 NO_DETREND = 1000000
 OUTPUT_DIR = os.path.join(os.path.dirname(__file__), 'outputs')
+
+
+mem = Memory(location='.', verbose=0)
 
 
 def evaluate_d_hat(patterns, d_hat):
@@ -50,6 +54,7 @@ def get_lambda_max_tv(X):
     return abs(np.diff(X)).max()
 
 
+@mem.cache
 def run_one(X_i, nyst_i, pattern_i, csc_params, trend_reg, nyst_reg,
             random_state, i=0, display=False):
 
@@ -138,7 +143,7 @@ if __name__ == "__main__":
     n_jobs = 1 if args.debug else args.n_jobs
 
     list_nyst_reg = [.9, .8, .5, .1]
-    list_trend_reg = [0.05, .1, .2, .5, NO_DETREND]
+    list_trend_reg = [0.05, .1, .2, .5, .9, NO_DETREND]
 
     n_times = 10000
     n_trials = 1 if args.debug else args.n_trials
@@ -155,7 +160,7 @@ if __name__ == "__main__":
         window=True, solver_d_kwargs=dict(max_iter=50, eps=1e-8),
         raise_on_increase=False, n_iter=n_iter, eps=1e-8,
         n_jobs=1, verbose=verbose,
-        solver_z='lgcd', solver_z_kwargs=dict(tol=1e-1 if args.debug else 1e-5)
+        solver_z='lgcd', solver_z_kwargs=dict(tol=1e-5)
         # algorithm='greedy'
     )
 
