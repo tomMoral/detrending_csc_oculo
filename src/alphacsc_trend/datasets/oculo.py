@@ -1,6 +1,8 @@
+import inspect
+import warnings
 import numpy as np
-import matplotlib.pyplot as plt
 from joblib import Memory
+import matplotlib.pyplot as plt
 from joblib.memory import MemorizedFunc
 
 from alphacsc.utils import check_random_state
@@ -30,14 +32,21 @@ def format_docstring(func):
 
 def random_cache(func):
     if not isinstance(func, MemorizedFunc):
-        return func
+        func = mem.cache(func)
+
+    signature = inspect.getargspec(func.func)
+    if 'random_state' not in signature.args:
+        warnings.warn(
+            f"decorator @random_cache used on function "
+            f"'{func.func.__module__}.{func.func.__name__}' "
+            "that does not take 'random_state' as an argument")
 
     def cached_random_function(*args, random_state=None, **kwargs):
         if random_state is None:
             res, info = func.call(*args, **kwargs, random_state=None)
             return res
         else:
-            return func(*args, **kwargs)
+            return func(*args, random_state=random_state, **kwargs)
     return cached_random_function
 
 
@@ -221,7 +230,7 @@ def load_data(n_trials, n_times, std_noise=.3, display=False,
         # Nystagmus type
         nystagmus_type = rng.choice(NYSTAGMUS_TYPES)
         # Nystagmus Frequency
-        nystagmus_freq = max(1, min(4+2*rng.randn(), 6))
+        nystagmus_freq = max(3, min(5+2*rng.randn(), 8))
         # Nystagmus amplitude
         nystagmus_amp = generate_amplitude('nystagmus', random_state=rng)
         # Amplitude of the saccads
