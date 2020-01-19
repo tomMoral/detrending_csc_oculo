@@ -50,12 +50,10 @@ if __name__ == "__main__":
                 xticks += [(pos, reg)]
                 df_l1tv.corr_full.plot(
                     kind='box', ax=ax_corr, positions=[pos - width / 2],
-                    color=props_full, patch_artist=True, showfliers=False,
-                    label='CSC with joint detrending')
+                    color=props_full, patch_artist=True, showfliers=False)
                 df_l1tv.corr_init.plot(
                     kind='box', ax=ax_corr, positions=[pos + width / 2],
-                    color=props_init, patch_artist=True, showfliers=False,
-                    label='detrending then CSC')
+                    color=props_init, patch_artist=True, showfliers=False)
                 df_l1tv.r2_full.plot(
                     kind='box', ax=ax_r2, positions=[pos - width / 2],
                     patch_artist=True, color=props_full, showfliers=False)
@@ -66,15 +64,31 @@ if __name__ == "__main__":
                 xticks += [(pos, f"No reg")]
                 df_l1tv.corr_full.plot(
                     kind='box', ax=ax_corr, positions=[pos],
-                    color=props_no, patch_artist=True, showfliers=False,
-                    label='CSC with no detrending')
+                    color=props_no, patch_artist=True, showfliers=False)
                 df_l1tv.r2_full.plot(
                     kind='box', ax=ax_r2, positions=[pos],
                     patch_artist=True, color=props_no, showfliers=False)
         xticks = np.array(xticks).T
+        legend_name = [
+            'Joint',
+            'Init',
+            'None'
+        ]
         for ax in [ax_corr, ax_r2]:
             ax.set_xticks(xticks[0].astype(float))
             ax.set_xticklabels(xticks[1])
-        ax_r2.set_yscale('log')
+            ax.set_xlabel('$\\lambda_{TV}$')
 
+            ax.legend(ax.artists[-3:], legend_name, ncol=3,
+                      bbox_to_anchor=(-.02, 1.02, 1., .3), loc="lower left")
+        ax_corr.set_ylabel('Pearson coefficient')
+
+        ax_r2.set_yscale('log')
+        ax_r2.set_ylabel('$R^2$ score')
+
+        fig_corr.tight_layout()
+        fig_r2.tight_layout()
+
+        fig_corr.savefig(os.path.join(OUTPUT_DIR, f"pearson_reg={lmbd}.pdf"))
+        fig_r2.savefig(os.path.join(OUTPUT_DIR, f"r2_reg={lmbd}.pdf"))
     plt.show()
