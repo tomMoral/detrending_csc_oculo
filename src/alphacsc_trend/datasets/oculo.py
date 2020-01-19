@@ -30,21 +30,22 @@ def format_docstring(func):
     return func
 
 
-def random_cache(func):
+def cache_randomized_func(func):
     if not isinstance(func, MemorizedFunc):
         func = mem.cache(func)
 
     signature = inspect.getargspec(func.func)
     if 'random_state' not in signature.args:
         warnings.warn(
-            f"decorator @random_cache used on function "
+            f"decorator @cache_randomized_func used on function "
             f"'{func.func.__module__}.{func.func.__name__}' "
-            "that does not take 'random_state' as an argument")
+            "that does not take 'random_state' as an argument.")
 
     def cached_random_function(*args, random_state=None, **kwargs):
         if random_state is None:
-            res, info = func.call(*args, **kwargs, random_state=None)
-            return res
+            # If random_state is None, the function is non deterministic so do
+            # not cache the result and just call the function.
+            return func.func(*args, **kwargs, random_state=None)
         else:
             return func(*args, random_state=random_state, **kwargs)
     return cached_random_function
@@ -191,7 +192,7 @@ def generate_signal(n_times=5000, s_freq=1000, nystagmus_type="pendular",
     return signal, nyst, nyst_pattern
 
 
-@random_cache
+@cache_randomized_func
 @mem.cache(ignore=['display'])
 def load_data(n_trials, n_times, std_noise=.3, display=False,
               random_state=None):
